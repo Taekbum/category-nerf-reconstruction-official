@@ -1,0 +1,88 @@
+{
+    "dataset": {
+        "live": 0,
+        "path": "Datasets/ScanNet/scene0066_00/sequences",
+        "format": "ScanNet",
+        "keep_alive": 20,
+        "habitat_dir": "Datasets/ScanNet/scene0066_00/habitat"
+    },
+    "optimizer": {
+        "args":{
+            "lr": 0.001,
+            "weight_decay": 0.013,
+            "pose_lr": 0.001,
+            "pose_weight_decay": 0.013,
+            "code_lr": 0.001,
+            "code_weight_decay": 0.013
+        }
+    },
+    "trainer": {
+        "imap_mode": 0,
+        "do_bg": 1,
+        "n_models": 100,
+        "train_device": "cuda:1",
+        "data_device": "cuda:1",
+        "training_strategy": "vmap",
+        "epochs": 1000000,
+        "scale": 1000.0,
+        "max_iter": 10001
+    },
+    "render": {
+        "depth_range": [0.0, 6.0],
+        "n_bins": 9,
+        "n_bins_cam2surface": 1,
+        "n_bins_cam2surface_bg": 5,
+        "iters_per_frame": 20,
+        "n_per_optim": 120,
+        "n_per_optim_bg": 1200
+    },
+    "model": {
+        "n_unidir_funcs": 5,
+        "obj_scale": 3.0,
+        "bg_scale": 10.0,
+        "color_scaling": 5.0,
+        "opacity_scaling": 10.0,
+        "gt_scene": 1,
+        "surface_eps": 0.1,
+        "other_eps": 0.05,
+        "keyframe_buffer_size": 20,
+        "keyframe_step": 25,
+        "keyframe_step_bg": 50,
+        "window_size": 5,
+        "window_size_bg": 10,
+        "hidden_layers_block": 1,
+        "hidden_feature_size": 32,
+        "hidden_feature_size_bg": 128,
+        "net_hyperparams": {
+            "shape_blocks": 2,
+            "texture_blocks": 1,
+            "W": 32,
+            "num_xyz_freq": 10,
+            "latent_dim": 32
+        }
+    },
+    "camera": {
+        "w": 640,
+        "h": 480,
+        "mw": 10,
+        "mh": 10
+    },
+    "vis": {
+        "vis_device": "cuda:1",
+        "n_vis_iter": 10000000,
+        "n_bins_fine_vis": 10,
+        "im_vis_reduce": 10,
+        "grid_dim": 256,
+        "live_vis": 1,
+        "live_voxel_size": 0.005,
+        "mesh_it": 10000,
+        "img_it": 1000000
+    },
+    "log_freq": 100,
+    "save_it": 2000,
+    "use_equal_batch": false,
+    "align_poses": true,
+    "load_pretrained": true,
+    "weight_root": "/media/satassd_1/tblee-larr/CVPR24/vMAP_offline/logs/vMAP_0819/ScanNet/refined_mask/1/scene0066_00",
+    "use_refined_mask": true
+}
