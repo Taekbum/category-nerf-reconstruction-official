@@ -79,7 +79,7 @@ class UniDirsEmbed(torch.nn.Module):
         self.register_buffer("frequency_bands", frequency_bands, persistent=False)
         self.register_buffer("scale", self.tensor_scale, persistent=True)
 
-    def forward(self, x, iteration=None):
+    def forward(self, x):
         tensor = x / self.tensor_scale   # functorch needs buffer, otherwise changed
         proj = self.B_layer(tensor)
         proj_bands = proj[..., None, :] * self.frequency_bands[None, None, :, None]
@@ -87,16 +87,6 @@ class UniDirsEmbed(torch.nn.Module):
         # embedding = torch.sin(torch.cat([xb, xb + 0.5 * np.pi], dim=-1))
         embedding = torch.sin(xb * np.pi)
         embedding = torch.cat([tensor] + [embedding], dim=-1)
-        if iteration is not None:
-            alpha = iteration/4000*self.n_freqs
-            k = torch.arange(self.n_freqs, dtype=torch.float32, device=x.device)
-            weight_ = (1-(alpha-k).clamp_(min=0,max=1).mul_(np.pi).cos_())/2
-            weight_ = weight_[None, None, :]
-            weight = torch.zeros_like(embedding)
-            weight[...,:3] = weight_[...,0:1].repeat(1,1,3)
-            for i in range(1,self.n_freqs):
-                weight[...,3+21*(i-1):3+21*i] = weight_[...,i:i+1].repeat(1,1,21)
-            embedding = weight * embedding
                 
         # print("emb size ", embedding.shape)
         return embedding

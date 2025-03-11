@@ -4,14 +4,10 @@ import numpy as np
 import torch
 from functorch import combine_state_for_ensemble
 import open3d
-import math
 from scipy.spatial.transform import Rotation
 import trimesh
 import scipy
-import render_rays
-import imageio
 from itertools import permutations
-import matplotlib.pyplot as plt
 import os
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
@@ -204,7 +200,6 @@ def accumulate_pointcloud(inst_id, inst_info_list, frame_samples, intrinsic_open
         
         inst_depth = np.copy(sample['depth'])
         inst_depth[~obj_mask] = 0.  # obj_mask
-        # inst_pc = unproject_pointcloud(inst_depth.transpose(1,0), intrinsic_open3d, T_CW)
         inst_pc = unproject_colored_pointcloud(sample['image'], inst_depth, intrinsic_open3d, T_CW)
         if inst_pcs is None:
             inst_pcs = inst_pc
@@ -363,42 +358,12 @@ def check_inside_ratio(pc, bbox3D):
     # print("ratio ", ratio)
     return ratio, indices
 
-def align_to_gravity(box3d_raw, gravity_dir):
-    box3d = box3d_raw
-    
-    Two_raw = np.eye(4)
-    Two_raw[:3, 3] = box3d_raw.center
-    Two_raw[:3, :3] = box3d_raw.R
-    z_o_raw = np.array([0,0,1])
-    z_o = (Two_raw[:3, :3].T).dot(-gravity_dir.T)
-    theta = math.acos(z_o_raw.dot(z_o))
-    # if np.abs(theta) < math.pi/3:
-    cross = np.cross(z_o_raw, z_o)
-    so3 = theta * cross / np.linalg.norm(cross)
-    R = Rotation.from_rotvec(so3).as_matrix()
-    Rwo = Two_raw[:3, :3].dot(R)
-    
-    box3d.R = Rwo
-    
-    return box3d
-
 def transform_pointcloud(cloud, T_rel):
     n = cloud.shape[0]
     cloud_hom = np.hstack((cloud, np.ones((n,1))))
     cloud_transformed = (T_rel.dot(cloud_hom.T)).T
     
     return cloud_transformed[:,:3]
-
-def trimesh_to_open3d(src):
-    dst = open3d.geometry.TriangleMesh()
-    dst.vertices = open3d.utility.Vector3dVector(src.vertices)
-    dst.triangles = open3d.utility.Vector3iVector(src.faces)
-    vertex_colors = src.visual.vertex_colors[:, :3].astype(np.float) / 255.0
-    dst.vertex_colors = open3d.utility.Vector3dVector(vertex_colors)
-    dst.compute_vertex_normals()
-
-    return dst
-
 
 def get_tensor_from_transform(RT, Tquad=False, use_so3=False):
     """
@@ -500,7 +465,6 @@ def so3torotation(so3):
     
     return rotations_matrix
 
-
 def quad2rotation(quad):
     """
     Convert quaternion to rotation in batch. Since all operation in pytorch, support gradient passing.
@@ -525,299 +489,6 @@ def quad2rotation(quad):
     rot_mat[:, 2, 1] = two_s * (qj * qk + qi * qr)
     rot_mat[:, 2, 2] = 1 - two_s * (qi ** 2 + qj ** 2)
     return rot_mat
-
-
-def load_scene_bound(bbox3D, cfg, use_gt_bound=False):
-    if use_gt_bound and hasattr(cfg, 'scene_bound'):
-        bound = np.array(cfg.scene_bound)
-    else:
-        bound = bbox3D#np.stack([bbox3D.center - bbox3D.extent/2, bbox3D.center + bbox3D.extent/2], axis=-1)
-    return bound
-
-def world2object(pts, dirs, T, inverse=False):
-    if not inverse:
-        T = torch.linalg.inv(T)
-    if pts is not None:
-        pts = (T[:, :3, :3] @ pts[..., None]).squeeze() + T[:, :3, -1]
-    if dirs is not None:
-        dirs = (T[:, :3, :3] @ dirs[..., None]).squeeze()
-
-    return [pts, dirs]
-
-def intersect_aabb(rays_o, rays_d, bound=None):
-    if bound is None:
-        bound = torch.from_numpy(np.array([[-1, 1], 
-                                           [-1, 1], 
-                                           [-1, 1]]).astype(np.float32)).to(rays_o.device)
-    
-    t = (bound[None, None, None, ...] - rays_o.unsqueeze(-1))/rays_d.unsqueeze(-1)  # (N_obj, H, W, 3, 2)
-    near_bb, _ = torch.max(torch.min(t, dim=-1)[0], dim=-1)
-    far_bb, _ = torch.min(torch.max(t, dim=-1)[0], dim=-1)
-    
-    # ## DEBUG ##
-    # ax = plt.axes(projection='3d')
-    # pts_near = (rays_o + near_bb[...,None] * rays_d)[19, ::100, ::100].reshape((-1,3)).cpu().numpy()
-    # pts_far = (rays_o + far_bb[...,None] * rays_d)[19, ::100, ::100].reshape((-1,3)).cpu().numpy()
-    # rays_o_ = rays_o[19, ::100, ::100].reshape((-1,3)).cpu().numpy()
-    # for i in range(rays_o_.shape[0]):
-    #     ax.plot([pts_near[i,0], pts_far[i,0]], [pts_near[i,1], pts_far[i,1]], [pts_near[i,2], pts_far[i,2]], color='r')
-    #     ax.plot([rays_o_[i,0], pts_near[i,0]], [rays_o_[i,1], pts_near[i,1]], [rays_o_[i,2], pts_near[i,2]], color='b')
-    # # ax.plot([pts_near[:,0], pts_far[:,0]], [pts_near[:,1], pts_far[:,1]], zs=[pts_near[:,2], pts_far[:,2]], color='r')
-    # # ax.plot([rays_o[:,0], pts_near[:,0]], [rays_o[:,1], pts_near[:,1]], zs=[rays_o[:,2], pts_near[:,2]], color='b')
-    # r = [-1, 1]
-    # from itertools import product, combinations
-    # for s, e in combinations(np.array(list(product(r, r, r))), 2):
-    #     if np.sum(np.abs(s-e)) == r[1]-r[0]:
-    #         ax.plot(*zip(s, e), color='g')
-    # plt.savefig('debug_near_and_far.png')
-    # ## DEBUG ##
-    
-    intersection_map = torch.stack(torch.where(far_bb > near_bb), dim=-1) # (N_obj, H, W) -> (N_true, 3)
-    positive_far = torch.cat(torch.where(far_bb[intersection_map[:,0],intersection_map[:,1],intersection_map[:,2]]>0)) # (n_intersect)
-    intersection_map = intersection_map[positive_far] # (n_intersect, 3)
-    
-    if intersection_map.shape[0] != 0:
-        z_ray_in = near_bb[intersection_map[:,0],intersection_map[:,1],intersection_map[:,2]] # (n_intersect)
-        z_ray_out = far_bb[intersection_map[:,0],intersection_map[:,1],intersection_map[:,2]]
-    else:
-        return None, None, None
-    
-    return z_ray_in, z_ray_out, intersection_map
-
-def box_pts(origins_O, dirs_O, T_objs):
-    z_ray_in_o, z_ray_out_o, intersection_map = intersect_aabb(origins_O, dirs_O)
-    if z_ray_in_o is not None:
-        rays_o_o = origins_O[intersection_map[:,0],intersection_map[:,1],intersection_map[:,2], :] # (n_intersect, 3)
-        dirs_o = dirs_O[intersection_map[:,0],intersection_map[:,1],intersection_map[:,2], :]
-        Two = T_objs[intersection_map[:,0], ...]
-        rays_o, rays_d = world2object(rays_o_o, dirs_o, Two, inverse=True)
-        
-        pts_box_in_o = rays_o_o + z_ray_in_o[..., None] * dirs_o # (n_intersect, 3) 
-        pts_box_in_w, _ = world2object(pts_box_in_o, None, Two, inverse=True)
-        z_vals_in_w = ((pts_box_in_w - rays_o)/rays_d)[:, 2] #torch.norm(pts_box_in_w - rays_o, dim=-1) / torch.norm(rays_d, dim=-1)
-        
-        pts_box_out_o = rays_o_o + z_ray_out_o[..., None] * dirs_o # (n_intersect, 3) 
-        pts_box_out_w, _ = world2object(pts_box_out_o, None, Two, inverse=True)
-        z_vals_out_w = ((pts_box_out_w - rays_o)/rays_d)[:, 2]#torch.norm(pts_box_out_w - rays_o, dim=-1) / torch.norm(rays_d, dim=-1)
-    else:
-        pts_box_in_w, rays_o, rays_d, z_vals_in_w, z_vals_out_w, pts_box_in_o, rays_o_o, dirs_o, z_ray_in_o, z_ray_out_o \
-            = [], [], [], [], [], [], [], [], [], []
-        
-    return pts_box_in_w, rays_o, rays_d, z_vals_in_w, z_vals_out_w, \
-        pts_box_in_o, rays_o_o, dirs_o, z_ray_in_o, z_ray_out_o, \
-        intersection_map
-    # return pts_box_o, viewdirs_box_o, z_vals_in_o, z_vals_out_o, intersection_map
-
-
-def render_image(c2w, vis_dict, cached_rays_dir, cfg, filename, chunk_size=500000):
-    scene_bg = vis_dict[0]
-    H, W = cached_rays_dir.shape[:2]
-    n_bins = cfg.n_bins_cam2surface + cfg.n_bins
-    n_bins_bg = cfg.n_bins_cam2surface_bg + cfg.n_bins
-    
-    obj_tensors = []
-    for cls_id, cls_k in vis_dict.items():
-        if cls_id == 0:
-            continue
-        for obj_id in cls_k.obj_ids:
-            obj_tensors.append(cls_k.object_tensor_dict[obj_id])
-    obj_tensors = torch.stack(obj_tensors, dim=0)
-    T_objs = get_transform_from_tensor_sim3(obj_tensors)
-    Toc = torch.linalg.inv(T_objs) @ c2w[None, :, :]  #[N_obj, 4, 4]
-    N_obj = len(obj_tensors)
-    
-    # sample points from background
-    rays_o = c2w[None, None, :3, -1] #[1,1,3]
-    rays_d = (c2w[None, None, :3, :3] @ cached_rays_dir[..., None].to(cfg.training_device)).squeeze() #[H,W,3]
-    
-    scene_bound = scene_bg.trainer.bound
-    near = 0.01
-    far = get_far(scene_bound, rays_o.cpu(), rays_d.cpu())[..., None] # (H, W, 1)
-    
-    z_vals, perturb = sample_along_ray(near, far, n_bins_bg) #[H,W,n_bins_bg]
-    z_vals = z_vals.to(rays_o.device)
-    pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., None] #[H,W,n_bins_bg,3]
-    sh_bg = pts.shape
-    
-    # sample points from objects  
-    dirs_O = (Toc[:, None, None, :3, :3] @ cached_rays_dir[None, :, :, :, None].to(cfg.training_device)).squeeze() #[N_obj,H,W,3]
-    origins_O = Toc[:, None, None, :3, -1].repeat(1, H, W, 1) #[N_obj, H, W, 3]
-    
-    pts_box_w, origins_box_w, viewdirs_box_w, z_vals_in_w, z_vals_out_w,\
-    pts_box_o, origins_box_o, viewdirs_box_o, z_vals_in_o, z_vals_out_o, \
-        intersection_map = box_pts(origins_O, dirs_O, T_objs)
-    Two = T_objs[intersection_map[:,0], ...]
-    
-    if z_vals_in_o is None or len(z_vals_in_o) == 0:
-        z_vals_obj = torch.zeros([1])
-        intersection_map = torch.from_numpy(np.zeros([1, 3]))
-    else:
-        n_intersect = z_vals_in_o.shape[0]
-        z_vals_box_o = torch.linspace(0., 1., n_bins)[None, :].repeat(n_intersect, 1).to(z_vals_in_o.device) * \
-                                   (z_vals_out_o - z_vals_in_o)[:, None]
-        pts_box_samples_o = pts_box_o[:, None, :] + viewdirs_box_o[:, None, :] * z_vals_box_o[..., None]
-        # pts_box_samples_w, _ = world2object(pts_box_samples_o.reshape((-1, 3)), None, \
-        #     Two.repeat(pts_box_samples_o.shape[1],1,1), inverse=True)
-        # pts_box_samples_w = pts_box_samples_w.reshape((n_intersect, n_bins, 3)) #[n_intersect, n_bins, 3]
-        
-        # z_vals_obj_w = ((pts_box_samples_w - origins_box_w[:, None, :])/viewdirs_box_w[:, None, :])[...,2]#torch.norm(pts_box_samples_w - origins_box_w[:, None, :], dim=-1) #[n_intersect, n_bins]
-        z_vals_obj = ((pts_box_samples_o - origins_box_o[:, None, :])/viewdirs_box_o[:, None, :])[...,2]
-        
-    z_vals, id_z_vals_bg, id_z_vals_obj = combine_z(z_vals,
-                                                    z_vals_obj if z_vals_in_o is not None else None,
-                                                    intersection_map,
-                                                    H,
-                                                    W,
-                                                    n_bins_bg,
-                                                    N_obj,
-                                                    n_bins)
-        # (H, W, n_bins_bg+N_obj*n_bins), (H, W, n_bins_bg), (H, W, N_obj*n_bins)
-    raw = torch.zeros((H, W, n_bins_bg+N_obj*n_bins, 4))
-    
-    pts_flat = pts.reshape((-1, 3))
-    n_chunks = int(np.ceil(pts_flat.shape[0] / chunk_size))
-    raw_bg = []
-    for i in range(n_chunks): # 2s/it 1000000 pts
-        chunk_idx = slice(i * chunk_size, (i + 1) * chunk_size)
-        bg_embedding_i = scene_bg.trainer.pe(pts_flat[chunk_idx, ...])
-        bg_alpha_i, bg_color_i = scene_bg.trainer.fc_occ_map(bg_embedding_i)
-        bg_occupancy_i = render_rays.occupancy_activation(bg_alpha_i)
-        raw_bg_i = torch.cat([bg_occupancy_i, bg_color_i], dim=-1)
-        raw_bg.append(raw_bg_i)
-    raw_bg = torch.cat(raw_bg)
-    raw_bg = raw_bg.view(list(sh_bg[:-1])+list(raw_bg.shape[-1:])).cpu()
-    raw.scatter_(2, id_z_vals_bg[..., None].repeat(1,1,1,4), raw_bg)
-    
-    if z_vals_in_o is not None and len(z_vals_in_o) != 0:
-        obj_idx = 0
-        intersection_map_ = []
-        raw_ = []
-        for cls_id, cls_k in vis_dict.items():
-            if cls_id == 0:
-                continue
-            shape_codes = cls_k.trainer.shape_codes
-            texture_codes = cls_k.trainer.texture_codes
-            pts_k = []
-            batch_indices = []
-            intersection_map_cls = []
-            for obj_id in cls_k.obj_ids:
-                pts_obj = pts_box_samples_o[intersection_map[:, 0] == obj_idx] #[n_intersect_(obj_id), n_bins, 3]
-                pts_obj = pts_obj.view((-1, 3)).cpu()
-                if pts_obj.shape[0] > 0:
-                    intersection_map_obj = intersection_map[intersection_map[:, 0] == obj_idx].repeat(n_bins, 1).cpu()
-                    
-                    index = cls_k.trainer.inst_id_to_index[obj_id]
-                    indices = torch.from_numpy(np.array([index])).repeat(pts_obj.shape[0])
-                    batch_indices.append(indices)
-                    pts_k.append(pts_obj)
-                    intersection_map_cls.append(intersection_map_obj)
-                    
-                obj_idx += 1
-            
-            if len(pts_k) > 0:
-                batch_indices = torch.cat(batch_indices).to(cfg.training_device) #[n_intersect_(cls_id)]
-                pts_k = torch.cat(pts_k) #[n_intersect_(cls_id), 3]
-                shape_code_k = shape_codes(batch_indices).cpu()
-                texture_code_k = texture_codes(batch_indices).cpu()
-                intersection_map_cls = torch.cat(intersection_map_cls) #[n_intersect_(cls_id), 3]
-                
-                raw_k = []
-                n_chunks = int(np.ceil(pts_k.shape[0] / chunk_size))
-                for i in range(n_chunks):
-                    chunk_idx = slice(i * chunk_size, (i + 1) * chunk_size)
-                    embedding_k_i = cls_k.trainer.pe(pts_k[chunk_idx, ...].to(cfg.training_device))
-                    alpha_k_i, color_k_i = cls_k.trainer.fc_occ_map(embedding_k_i, \
-                        shape_code_k[chunk_idx, ...].to(cfg.training_device), texture_code_k[chunk_idx, ...].to(cfg.training_device))
-                    occupancy_k_i = render_rays.occupancy_activation(alpha_k_i)
-                    raw_k_i = torch.cat([occupancy_k_i, color_k_i], dim=-1)
-                    raw_k.append(raw_k_i)
-                raw_k = torch.cat(raw_k)
-                
-                intersection_map_.append(intersection_map_cls)
-                raw_.append(raw_k)
-        
-        raw_ = torch.cat(raw_).cpu() #[n_intersect, 4]
-        intersection_map_ = torch.cat(intersection_map_) #[n_intersect, 3]
-        
-        raw_sparse = torch.zeros((H, W, N_obj*n_bins, 4))
-        raw_sparse[intersection_map_[:, 1], intersection_map_[:, 2], intersection_map_[:, 0], :] = raw_
-        raw.scatter_(2, id_z_vals_obj[..., None].repeat(1,1,1,4), raw_sparse)
-        # raw_k_sparse = torch.zeros((H, W, N_obj*n_bins, 4))
-        # raw_k_sparse[intersection_map_cls[:, 1], intersection_map_cls[:, 2], intersection_map_cls[:, 0], :] = raw_k
-        # raw.scatter_(2, id_z_vals_obj[..., None].repeat(1,1,1,4), raw_k_sparse)   
-        
-    occupancy, color = raw[..., 0], raw[...,1:] # alpha, color = raw[..., 0], raw[...,1:]
-    # occupancy = render_rays.occupancy_activation(alpha)
-    termination = render_rays.occupancy_to_termination(occupancy, is_batch=True)
-    render_color = render_rays.render(termination[..., None], color, dim=-2) # (H, W, 3)
-    
-    rgb8 = to8b(render_color.numpy()).transpose(1,0,2)
-    imageio.imwrite(filename, rgb8)
-    
-def sample_along_ray(near, far, N_samples, sampling_method='linear', perturb=1.):
-    # Sample along each ray given one of the sampling methods. Under the logic, all rays will be sampled at
-    # the same times.
-    t_vals = torch.linspace(0., 1., N_samples)[None, None, :]
-    if sampling_method == 'squareddist':
-        z_vals = near * (1. - np.square(t_vals)) + far * (np.square(t_vals))
-    elif sampling_method == 'lindisp':
-        # Sample linearly in inverse depth (disparity).
-        z_vals = 1. / (1. / near * (1. - t_vals) + 1. / far * (t_vals))
-    else:
-        # Space integration times linearly between 'near' and 'far'. Same
-        # integration points will be used for all rays.
-        z_vals = near * (1.-t_vals) + far * (t_vals)
-        if sampling_method == 'discrete':
-            perturb = 0
-
-    # Perturb sampling time along each ray. (vanilla NeRF option)
-    if perturb > 0.:
-        # get intervals between samples
-        mids = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
-        upper = torch.cat([mids, z_vals[..., -1:]], -1)
-        lower = torch.cat([z_vals[..., :1], mids], -1)
-        # stratified samples in those intervals
-        t_rand = torch.rand(z_vals.shape)
-        z_vals = lower + (upper - lower) * t_rand
-
-    return z_vals, perturb
-
-def get_far(scene_bound, rays_o, rays_d):
-    x_scene, y_scene, z_scene = scene_bound.extent/2
-    corner_points = np.array([[x_scene,-x_scene,x_scene,-x_scene,x_scene,-x_scene,x_scene,-x_scene],
-                            [y_scene,y_scene,-y_scene,-y_scene,y_scene,y_scene,-y_scene,-y_scene],
-                            [z_scene,z_scene,z_scene,z_scene,-z_scene,-z_scene,-z_scene,-z_scene]])
-    corner_points_w = scene_bound.R @ corner_points + scene_bound.center[:, None]
-    corner_points_w = torch.from_numpy(corner_points_w.astype(np.float32))
-    min_points, _ = torch.min(corner_points_w, dim=-1)
-    max_points, _ = torch.max(corner_points_w, dim=-1)
-    bound = torch.stack([min_points, max_points], dim=-1)
-    
-    t = (bound[None, None, ...] - rays_o.unsqueeze(-1))/rays_d.unsqueeze(-1)  # (H, W, 3, 2)
-    far, _ = torch.min(torch.max(t, dim=-1)[0], dim=-1) # (H, W)
-    far += 0.01
-    
-    return far
-
-def combine_z(z_vals_bg, z_vals_obj, intersection_map, H, W, N_samples_bg, N_obj, N_samples_obj):
-    if z_vals_obj is None:
-        z_vals_obj_sparse = torch.zeros([H, W, N_obj * N_samples_obj])
-    else:
-        z_vals_obj_sparse = torch.zeros([H, W, N_obj, N_samples_obj]).to(z_vals_obj.device)
-        z_vals_obj_sparse[intersection_map[:,1], intersection_map[:,2], intersection_map[:,0], :] = \
-            z_vals_obj
-        z_vals_obj_sparse = z_vals_obj_sparse.view((H, W, N_obj * N_samples_obj))
-    
-    if z_vals_bg is None:
-        z_vals, _ = torch.sort(z_vals_obj_sparse, dim=-1)
-        id_z_vals_bg = None
-    else:
-        z_vals, _ = torch.sort(torch.cat([z_vals_obj_sparse, z_vals_bg], dim=-1), dim=-1) # (H, W, N_samples_bg+N_obj*N_samples_obj)
-        id_z_vals_bg = torch.searchsorted(z_vals, z_vals_bg) # (H, W, N_samples_bg)
-    
-    id_z_vals_obj = torch.searchsorted(z_vals, z_vals_obj_sparse)#.view((H, W, N_obj*N_samples_obj))
-    
-    return z_vals, id_z_vals_bg.cpu(), id_z_vals_obj.cpu()
 
 def to8b(x): return (255*np.clip(x, 0, 1)).astype(np.uint8)
 
@@ -853,155 +524,8 @@ def importance_sampling_coords(weights, N_samples, det=False, pytest=False):
     inds = torch.min((cdf.shape[-1] - 1) * torch.ones_like(inds), inds)
 
     return inds, u, cdf
-
-def plot_uncertainty_field(metrics_plot, viewing_points, points_all, selected_inds, selected_view=False, obj_id=None, mesh_dir=None, transform_np=None):
-    import matplotlib.cm as cm
-    import matplotlib.pylab as plab
-    from matplotlib.colors import ListedColormap
-    
-    cmap = plab.cm.plasma
-    my_cmap = cmap(np.arange(cmap.N))
-    my_cmap[:, -1] = 0.75#np.linspace(0, 1, cmap.N)
-    my_cmap = ListedColormap(my_cmap)
-    
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    ax.set_xlim(-1, 1)
-    ax.set_ylim(-1, 1)
-    ax.set_zlim(-1, 1)
-    
-    if mesh_dir is not None:
-        # center mesh
-        pred_mesh_path = os.path.join(mesh_dir, f'it_10000_obj{obj_id}.obj')
-        pred_mesh = trimesh.load(pred_mesh_path)
-        points = transform_pointcloud(pred_mesh.vertices, transform_np)
-        gt_pcd = open3d.geometry.PointCloud(points=open3d.utility.Vector3dVector(points))
-        gt_pcd = gt_pcd.voxel_down_sample(0.01)
-        points = np.asarray(gt_pcd.points)
-        xs, ys, zs = points[:,0], points[:,1], points[:,2]
-        ax.scatter(xs, ys, zs, c='black')
-    
-    # surface entropies
-    xyz = points_all.numpy()
-    x_plot = xyz[...,0]
-    y_plot = xyz[...,1]
-    z_plot = xyz[...,2]
-    fmin, fmax = metrics_plot.max(), metrics_plot.min()
-    metrics_plot = (metrics_plot - fmin) / (fmax - fmin)
-    if not selected_view:
-        metrics_plot[selected_inds] = 0
-        metrics_plot = metrics_plot.reshape(100,100)
-    ax.plot_surface(x_plot, y_plot, z_plot, rstride=1, cstride=1,
-        facecolors=my_cmap(metrics_plot), linewidth=0)
-    
-    m = cm.ScalarMappable(cmap=my_cmap)
-    m.set_array(metrics_plot)
-    plt.colorbar(m)
-    
-    # viewing points
-    viewing_points = viewing_points/np.linalg.norm(viewing_points, axis=-1, keepdims=True)
-    xs_view, ys_view, zs_view = viewing_points[:,0], viewing_points[:,1], viewing_points[:,2]
-    ax.scatter(xs_view, ys_view, zs_view, c='green')
-    
-    # selected points
-    if selected_view:
-        inds_unique = selected_inds.unique()
-        for ind in inds_unique:
-            x_sel = viewing_points[ind,0]
-            y_sel = viewing_points[ind,1]
-            z_sel = viewing_points[ind,2]
-            count = (selected_inds==ind).count_nonzero().item()
-            ax.scatter(x_sel, y_sel, z_sel, c='red')
-            ax.text(x_sel, y_sel, z_sel, str(count), color='red')
-    # else:
-    #     xyz_sel = xyz.reshape(-1,3)[selected_inds]
-    #     x_sel = xyz_sel[:,0]
-    #     y_sel = xyz_sel[:,1]
-    #     z_sel = xyz_sel[:,2]
-    #     ax.scatter(x_sel, y_sel, z_sel, c='red')
-    
-    # To visualize well
-    poles = np.array([[0,0,1], [0,0,-1]])
-    xs_pole, ys_pole, zs_pole = poles[:,0], poles[:,1], poles[:,2]
-    ax.scatter(xs_pole, ys_pole, zs_pole, c='black')
-    xs_eq = x_plot[z_plot==0]
-    ys_eq = y_plot[z_plot==0]
-    zs_eq = np.zeros_like(xs_eq)
-    ax.plot(xs_eq, ys_eq, zs_eq, '-k')
-    
-    # Turn off the axis planes
-    ax.view_init()
-    ax.azim = 0
-    ax.elev = 0
-    ax.set_axis_off()
-    plt.show()
-    # save_file = os.path.join(save_dir_cls, f'{obj_id}.png')
-    # plt.savefig(save_file)
-
-def plot_selected(metrics_plot, viewing_points, points_all, selected_inds, selected_view=False, obj_id=None, mesh_dir=None, transform_np=None):
-    fig = make_subplots(rows=1, cols=1, specs=[[{'type': 'surface'}]])
-    
-    if mesh_dir is not None:
-        # center mesh
-        pred_mesh_path = os.path.join(mesh_dir, f'it_10000_obj{obj_id}.obj')
-        pred_mesh = trimesh.load(pred_mesh_path)
-        points = transform_pointcloud(pred_mesh.vertices, transform_np)
-        gt_pcd = open3d.geometry.PointCloud(points=open3d.utility.Vector3dVector(points))
-        gt_pcd = gt_pcd.voxel_down_sample(0.01)
-        points = np.asarray(gt_pcd.points)
-        xs, ys, zs = points[:,0], points[:,1], points[:,2]
-        fig.add_trace(go.Scatter3d(x=xs, y=ys, z=zs))
-    
-    # surface entropies
-    xyz = points_all.numpy()
-    x_plot = xyz[...,0]
-    y_plot = xyz[...,1]
-    z_plot = xyz[...,2]
-    if not selected_view:
-        # metrics_plot[selected_inds] = 0
-        metrics_plot = metrics_plot.reshape(100,100)
-    fig.add_trace(go.Surface(x=x_plot, y=y_plot, z=z_plot, colorscale='plasma', surfacecolor=metrics_plot,
-                             cmin=metrics_plot.min(), cmax=metrics_plot.max(), colorbar=dict(len=0.75, x=0.85),
-                             showscale=True, opacity=0.75))
-    
-    # viewing points
-    viewing_points = viewing_points/np.linalg.norm(viewing_points, axis=-1, keepdims=True)
-    xs_view, ys_view, zs_view = viewing_points[:,0], viewing_points[:,1], viewing_points[:,2]
-    fig.add_trace(go.Scatter3d(x=xs_view, y=ys_view, z=zs_view, mode='markers', 
-                               marker=dict(size=1, color='green')))
-    
-    # selected points
-    if selected_view:
-        inds_unique = selected_inds.unique()
-        x_sel, y_sel, z_sel, count = [], [], [] ,[]
-        for ind in inds_unique:
-            x_sel.append(viewing_points[ind,0])
-            y_sel.append(viewing_points[ind,1])
-            z_sel.append(viewing_points[ind,2])
-            count.append((selected_inds==ind).count_nonzero().item())
-        fig.add_trace(go.Scatter3d(x=x_sel, y=y_sel, z=z_sel, mode='markers+text', marker=dict(size=1, color='red'), 
-                                    text=count, textposition='top center'))
-            
-    fig.update_layout(title_text="selected w/ reliability")
-    fig.show()
     
 def plot_reliability(reliability, x, y, z, mesh_dir=None, obj_id=None, center_np=None, r=None):
-    '''
-    reliability plot using plotly
-    '''
-    
-    # fig_ = plt.figure()
-    # ax = fig_.add_subplot(1,1,1)
-    # colors = ['green', 'red', 'blue']
-    # reliability_types = [reliability[reliability<beta_m], reliability[np.bitwise_and(reliability>beta_m,reliability<beta_M)], reliability[reliability>beta_M]]
-    # for idx in range(len(colors)):
-    #     reliability_type = reliability_types[idx]
-    #     y = idx * np.ones_like(reliability_type)
-    #     # save term_prob plots
-    #     ax.scatter(reliability_type, y, c=colors[idx])
-    # plt.show()
-    # # plt.close()
-    
     fig = make_subplots(rows=1, cols=1, specs=[[{'type': 'surface'}]])
     fig.update_scenes(camera=dict(up=dict(x=0, y=-1, z=0), center=dict(x=0, y=0, z=0), eye=dict(x=2, y=-1, z=1)))
     
@@ -1034,33 +558,19 @@ def calculate_reliability(metric, eta=0.9, m1=0.1, m2=0.15, M1=0.57, M2=0.65):
     reliability = 1/(1+np.exp(alpha_m*(metric-beta_m))) + 1/(1+np.exp(-alpha_M*(metric-beta_M)))
     return reliability
 
-def geometry_segmentation(rgb, depth, intrinsic_open3d, debug_dir=None, frame=0):
-    # t1 = time.time()
-    if debug_dir is not None:
-        os.makedirs(debug_dir, exist_ok=True)
-    
+def geometry_segmentation(rgb, depth, intrinsic_open3d):
     valid_mask = depth>0
     pcd = unproject_pointcloud(depth, intrinsic_open3d, np.eye(4))
     pc = np.asarray(pcd.points)
     depth_map = np.tile(np.zeros_like(depth)[...,None], (1,1,3))
     depth_map[valid_mask] = pc
-    
-    # calculate surface normal
-    # normal_image = compute_normals(depth_map)
-    # depth_map = depth_map[6:-6, 6:-6]
-    # depth = depth[6:-6, 6:-6]
+
     normal_image = np.zeros_like(depth_map)
     pcd.estimate_normals(search_param=open3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=100))
     normals = np.asarray(pcd.normals)
     normals = np.where(normals[:,2:]>0, -normals, normals)
     normal_image[valid_mask] = normals
     H, W = depth.shape
-    if debug_dir is not None:
-        normal_vis = (255*(normal_image+1)/2).astype(np.uint8)
-        normal_dir = os.path.join(debug_dir, "normal")
-        os.makedirs(normal_dir, exist_ok=True)
-        normal_file = os.path.join(normal_dir, "%03d.png" % frame)
-        cv2.imwrite(normal_file, normal_vis)
     
     # calculate depth discontinuities
     element = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
@@ -1071,17 +581,6 @@ def geometry_segmentation(rgb, depth, intrinsic_open3d, debug_dir=None, frame=0)
     ratio = np.zeros_like(depth)
     ratio[valid_mask] = np.maximum(erosion, dilatation)[valid_mask]/depth[valid_mask]
     _, discontinuity_image = cv2.threshold(ratio, 0.01, 1, cv2.THRESH_BINARY)
-    if debug_dir is not None:
-        discontinuity_dir = os.path.join(debug_dir, "discontinuity")
-        os.makedirs(discontinuity_dir, exist_ok=True)
-        discontinuity_file = os.path.join(discontinuity_dir, "%03d.png" % frame)
-        cv2.imwrite(discontinuity_file, (255*discontinuity_image).astype(np.uint8))
-    
-    # # calculate maximum distance map
-    # theta = np.pi/6
-    # maximum_distance_image = np.zeros_like(depth)
-    # sigma_axial_noise = np.zeros_like(depth)
-    # sigma_axial_noise[valid_mask] = 0.0012 + 0.0019*(depth[valid_mask]-0.02)**2 + 0.0001/np.sqrt(depth[valid_mask])*theta**2/(np.pi/2-theta)**2
     
     # calculate convexity map
     min_convexity_map = 10 * np.ones_like(depth)
@@ -1109,26 +608,13 @@ def geometry_segmentation(rgb, depth, intrinsic_open3d, debug_dir=None, frame=0)
     element2 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3), anchor=(1,1))
     convex_map = cv2.morphologyEx(convex_map, cv2.MORPH_OPEN, element2)
     convex_map[depth==0] = 0
-    if debug_dir is not None:
-        convexity_dir = os.path.join(debug_dir, f"convexity_{th_convex}")
-        os.makedirs(convexity_dir, exist_ok=True)
-        convexity_file = os.path.join(convexity_dir, "%03d.png" % frame)
-        cv2.imwrite(convexity_file, (255*convex_map).astype(np.uint8))
     
     # compute edge map
     discontinuity_image_closed = cv2.morphologyEx(discontinuity_image, cv2.MORPH_CLOSE, element2)
-    # distance_map_closed = cv2.morphologyEx(distance_map, cv2.MORPH_CLOSE, element2)
-    # _, distance_discontinuity_map = cv2.threshold(distance_map_closed + discontinuity_image, 1, 1, cv2.THRESH_TRUNC)
     edge_map = convex_map - discontinuity_image_closed
     edge_map[edge_map<0] = 0
     edge_map[depth==0] = 0
-    edge_map_uint8 = edge_map.astype(np.uint8)
-    if debug_dir is not None:
-        edge_dir = os.path.join(debug_dir, "edge")
-        os.makedirs(edge_dir, exist_ok=True)
-        edge_file = os.path.join(edge_dir, "edge_%03d.png" % frame)
-        cv2.imwrite(edge_file, 255*edge_map_uint8)
-    
+    edge_map_uint8 = edge_map.astype(np.uint8)    
     
     # compute label map
     contours, hierarchy = cv2.findContours(edge_map_uint8, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
@@ -1143,10 +629,6 @@ def geometry_segmentation(rgb, depth, intrinsic_open3d, debug_dir=None, frame=0)
     labels[small_contours[(~no_parent_mask) & no_sibling_mask]] = labels[parent_contours[(~no_parent_mask) & no_sibling_mask]]
     labels[small_contours[~(no_sibling_mask | no_parent_mask)]] = -1
     
-    # contours_small = tuple(np.array(contours, dtype=object)[small_contours[~(no_sibling_mask) | no_parent_mask]])
-    # hierarchy_small = hierarchy[:,small_contours[~(no_sibling_mask) | no_parent_mask],:]
-    # cv2.drawContours(edge_map_uint8, contours_small, -1, 0, thickness=2, lineType=cv2.FILLED, hierarchy=hierarchy_small)
-    
     output = np.zeros(depth_map.shape, dtype=np.uint8)
     output_labels = np.zeros(depth.shape, dtype=np.int32)  
     for i in range(len(contours)):
@@ -1154,20 +636,9 @@ def geometry_segmentation(rgb, depth, intrinsic_open3d, debug_dir=None, frame=0)
             color = imgviz.label_colormap()[labels[i] % 256]
             cv2.drawContours(output, contours, i, (int(color[0]),int(color[1]),int(color[2])), thickness=2, lineType=cv2.FILLED, hierarchy=hierarchy)
             cv2.drawContours(output_labels, contours, i, int(labels[i]), thickness=2, lineType=cv2.FILLED, hierarchy=hierarchy)
-            # cv2.drawContours(edge_map_uint8, contours, i, 0, thickness=2, hierarchy=hierarchy, maxLevel=1)
 
     output[edge_map_uint8 == 0] = np.zeros(3)
     output_labels[edge_map_uint8 == 0] = -1
-    if debug_dir is not None:
-        edge_contour_dir = os.path.join(debug_dir, "edge_contour")
-        os.makedirs(edge_contour_dir, exist_ok=True)
-        edge_contour_file = os.path.join(edge_contour_dir, "edge_contour_%03d.png" % frame)
-        cv2.imwrite(edge_contour_file, 255*edge_map_uint8)
-        
-        raw_output_dir = os.path.join(debug_dir, "raw_output")
-        os.makedirs(raw_output_dir, exist_ok=True)
-        raw_output_file = os.path.join(raw_output_dir, "raw_output_%03d.png" % frame)
-        cv2.imwrite(raw_output_file, output)
 
     min_dists = 0.05 * np.ones_like(depth)
     
@@ -1201,16 +672,11 @@ def geometry_segmentation(rgb, depth, intrinsic_open3d, debug_dir=None, frame=0)
     
     valid_labels = output_labels >= 0
     output[valid_labels] = imgviz.label_colormap()[output_labels[valid_labels] % 256]
-    if debug_dir is not None:
-        output_dir = os.path.join(debug_dir, "output")
-        os.makedirs(output_dir, exist_ok=True)
-        output_file = os.path.join(output_dir, "%03d.png" % frame)
-        cv2.imwrite(output_file, output) 
     
     labels_unique = np.unique(output_labels)
     n_labels = labels_unique.shape[0]
-    segments = []#{}
-    segment_masks = []#{}
+    segments = []
+    segment_masks = []
     for i in range(n_labels):
         label = labels_unique[i]
         if label >= 0:
@@ -1224,22 +690,11 @@ def geometry_segmentation(rgb, depth, intrinsic_open3d, debug_dir=None, frame=0)
             segment.rgbs = rgb[label_mask]
             segments.append(segment)
             segment_masks.append(label_mask)
-            # segments[label] = Segment()
-            # segments[label].points.append(depth_map[label_mask])
-            # segments[label].normals.append(normal_image[label_mask])
-            # segments[label].rgbs.append(rgb[label_mask])
-            # segment_masks[label] = 255*(label_mask.astype(np.uint8))
-
-    # t2 = time.time()
-    # print(f"geometry_segmentation takes {t2-t1} seconds")
     
     return normal_image, output, segment_masks, segments
 
-def refine_inst_data(inst_data, segment_masks, segments, threshold=0.7, debug_dir=None, frame=0): # NOTE: threshold=0.1 from voxblox++
-    # t1 = time.time()
+def refine_inst_data(inst_data, segment_masks, threshold=0.7):
     inst_data_refined = np.zeros_like(inst_data)
-    if debug_dir is not None:
-        output = np.tile(np.zeros_like(inst_data)[...,None], (1,1,3))
     obj_ids = list(np.unique(inst_data))
     if 0 in obj_ids:
         obj_ids.remove(0)
@@ -1262,16 +717,7 @@ def refine_inst_data(inst_data, segment_masks, segments, threshold=0.7, debug_di
             idx_sel = np.argmax(rates)
             obj_id_sel = obj_ids_array[idx_sel]
             inst_data_refined[segment_mask] = obj_id_sel
-            if debug_dir is not None:
-                output[segment_mask] = imgviz.label_colormap()[obj_id_sel % 256]
-    
-    if debug_dir is not None:
-        output_folder = os.path.join(debug_dir, f"output_refined_{threshold}")
-        os.makedirs(output_folder, exist_ok=True)
-        output_file = os.path.join(output_folder, "%03d.png" % frame)
-        cv2.imwrite(output_file, output) 
-    # t2 = time.time()
-    # print(f"geometry_segmentation takes {t2-t1} seconds")        
+     
     return inst_data_refined
 
 class Segment():

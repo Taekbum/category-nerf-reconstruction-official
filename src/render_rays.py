@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 
 def occupancy_activation(alpha, distances=None):
     # occ = 1.0 - torch.exp(-alpha * distances)

@@ -1,9 +1,8 @@
 import torch
 import render_rays
-import torch.nn.functional as F
 import numpy as np
 
-def step_batch_loss_reg(cls_dict, cls_ids):#obj_ids
+def step_batch_loss_reg(cls_dict, cls_ids):
     loss_reg_shape = torch.zeros(cls_ids.shape[0]).to(cls_ids.device)
     loss_reg_texture = torch.zeros_like(loss_reg_shape)
     for idx, cls_k in enumerate(cls_dict.values()):
@@ -88,16 +87,16 @@ def log_loss(writer, batch_loss_dict, iteration):
             continue
         losses = batch_loss_dict[key]
         for i in range(losses.shape[0]):
-            cls_id = cls_ids[i]#.item()
+            cls_id = cls_ids[i]
             loss = losses[i].item()
             writer.add_scalar('cls_'+str(cls_id)+'/'+key, loss, iteration)
             
-def log_psnr(writer, cls_ids, batch_loss_col, iteration, bg_loss_col=None):#obj_ids
+def log_psnr(writer, cls_ids, batch_loss_col, iteration, bg_loss_col=None):
     if bg_loss_col is not None:
         psnr_bg = -10*np.log(bg_loss_col.item()) / np.log(10)
         writer.add_scalar('background/psnr', psnr_bg, iteration)
     for i in range(cls_ids.shape[0]):
-        cls_id = cls_ids[i]#.item()
+        cls_id = cls_ids[i]
         loss_col = batch_loss_col[i].item()
         psnr = -10*np.log(loss_col) / np.log(10)
         writer.add_scalar('cls_'+str(cls_id)+'/psnr', psnr, iteration)
