@@ -14,11 +14,9 @@
         }
     },
     "trainer": {
-        "do_bg": 1,
         "n_models": 100,
         "train_device": "cuda:1",
         "data_device": "cuda:1",
-        "training_strategy": "vmap",
         "scale": 1000.0,
         "max_iter": 10001,
         "log_iter": 100,
@@ -57,7 +55,6 @@
         "mh": 10
     },
     "vis": {
-        "vis_device": "cuda:1",
         "grid_dim": 256,
         "live_voxel_size": 0.005,
         "mesh_it": 10000
@@ -65,7 +62,7 @@
     "registration": {
         "load_registration_result": true,
         "load_pretrained": true,
-        "weight_root": "/media/satassd_1/tblee-larr/CVPR24/vMAP_offline/logs/vMAP_0819/ScanNet/refined_mask/1/scene0066_00",
+        "weight_root": "pretrained/vMAP/ScanNet/scene0066_00",
         "multi_init_pose": true,
         "eta1": 0.06,
         "eta2": 0.15,

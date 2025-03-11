@@ -10,11 +10,9 @@ class Config:
             config = json.load(json_file)
 
         # training strategy
-        self.do_bg = bool(config["trainer"]["do_bg"])
         self.training_device = config["trainer"]["train_device"]
         self.data_device = config["trainer"]["data_device"]
         self.max_n_models = config["trainer"]["n_models"]
-        self.training_strategy = config["trainer"]["training_strategy"]  # "forloop" "vmap"
         self.max_iter = config["trainer"]["max_iter"]
         self.save_iter = config["trainer"]["save_iter"]
         self.log_iter = config["trainer"]["log_iter"]

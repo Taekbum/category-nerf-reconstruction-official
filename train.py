@@ -62,10 +62,9 @@ def main(args):
     start = 0
     ckpt_dir = os.path.join(log_dir, "ckpt")
 
-    if cfg.training_strategy == "vmap":
-        for cls_id in cls_dict.keys():
-            fc_models.append(cls_dict[cls_id].trainer.fc_occ_map)
-            pe_models.append(cls_dict[cls_id].trainer.pe)
+    for cls_id in cls_dict.keys():
+        fc_models.append(cls_dict[cls_id].trainer.fc_occ_map)
+        pe_models.append(cls_dict[cls_id].trainer.pe)
     
     # ###################################
     # # measure trainable params in total
@@ -81,9 +80,8 @@ def main(args):
     # print("total param ", total_params)
     
     # add vmap
-    if cfg.training_strategy == "vmap":
-        fc_model, fc_param, fc_buffer = utils.update_vmap(fc_models, optimizer)
-        pe_model, pe_param, pe_buffer = utils.update_vmap(pe_models, optimizer)
+    fc_model, fc_param, fc_buffer = utils.update_vmap(fc_models, optimizer)
+    pe_model, pe_param, pe_buffer = utils.update_vmap(pe_models, optimizer)
     
     # train
     n_cls = len(list(cls_dict.keys()))
@@ -121,13 +119,6 @@ def main(args):
             gt_rgb, gt_depth, depth_mask, obj_mask, input_pcs, sampled_z, indices \
                 = cls_k.get_training_samples(n_sample_per_step)
             
-            if cfg.training_strategy == "forloop":
-                gt_rgb = gt_rgb.detach() / 255.
-                gt_depth = gt_depth.detach()
-                depth_mask = depth_mask.detach()
-                obj_mask = obj_mask.detach()
-                sampled_z = sampled_z.detach()
-            
             batch_gt_depth.append(gt_depth)
             batch_gt_rgb.append(gt_rgb)
             batch_depth_mask.append(depth_mask)
@@ -143,56 +134,28 @@ def main(args):
             batch_shape_codes.append(shape_code_k)
             batch_texture_codes.append(texture_code_k)
         
-        if cfg.training_strategy == "vmap":
-            batch_input_pcs = torch.stack(batch_input_pcs)
-            batch_gt_depth = torch.stack(batch_gt_depth)
-            batch_gt_rgb = torch.stack(batch_gt_rgb) / 255.
-            batch_depth_mask = torch.stack(batch_depth_mask)
-            batch_obj_mask = torch.stack(batch_obj_mask)
-            batch_sampled_z = torch.stack(batch_sampled_z)
-            batch_shape_codes = torch.stack(batch_shape_codes)
-            batch_texture_codes = torch.stack(batch_texture_codes)
+        batch_input_pcs = torch.stack(batch_input_pcs)
+        batch_gt_depth = torch.stack(batch_gt_depth)
+        batch_gt_rgb = torch.stack(batch_gt_rgb) / 255.
+        batch_depth_mask = torch.stack(batch_depth_mask)
+        batch_obj_mask = torch.stack(batch_obj_mask)
+        batch_sampled_z = torch.stack(batch_sampled_z)
+        batch_shape_codes = torch.stack(batch_shape_codes)
+        batch_texture_codes = torch.stack(batch_texture_codes)
         cls_ids = np.concatenate(cls_ids, axis=0)
         
         # with performance_measure(f"Training over {len(cls_dict.keys())} classes,"):
-        if cfg.training_strategy == "forloop":
-            # for loop training
-            batch_alpha = []
-            batch_color = []
-            for k, cls_id in enumerate(cls_dict.keys()):
-                cls_k = cls_dict[cls_id]
-                input_pcs = batch_input_pcs[k]
-                embedding_k = cls_k.trainer.pe(input_pcs)
-                shape_code_k = batch_shape_codes[k]
-                texture_code_k = batch_texture_codes[k]
-                alpha_k, color_k = cls_k.trainer.fc_occ_map(embedding_k, shape_code_k, texture_code_k)
-                batch_alpha.append(alpha_k)
-                batch_color.append(color_k)
-        elif cfg.training_strategy == "vmap":
-            # batched training
-            batch_input_embeddings = vmap(pe_model)(pe_param, pe_buffer, batch_input_pcs)
-            batch_alpha, batch_color = vmap(fc_model)(fc_param, fc_buffer, batch_input_embeddings, batch_shape_codes, batch_texture_codes)
-        else:
-            print("training strategy {} is not implemented ".format(cfg.training_strategy))
-            exit(-1)
+        # batched training
+        batch_input_embeddings = vmap(pe_model)(pe_param, pe_buffer, batch_input_pcs)
+        batch_alpha, batch_color = vmap(fc_model)(fc_param, fc_buffer, batch_input_embeddings, batch_shape_codes, batch_texture_codes)
 
         # Loss
-        if cfg.training_strategy == "vmap":
-            batch_loss, batch_loss_dict, batch_loss_col = \
-                loss.step_batch_loss(batch_alpha, batch_color,
-                                        batch_gt_depth.detach(), batch_gt_rgb.detach(),
-                                        batch_obj_mask.detach(), batch_depth_mask.detach(),
-                                        batch_sampled_z.detach())
-            batch_loss_dict['cls_ids'] = cls_ids
-        elif cfg.training_strategy == "forloop":
-            batch_loss_dict = {}
-            batch_loss = 0
-            for i in range(len(batch_alpha)):
-                class_loss, _, _ = loss.step_batch_loss(batch_alpha[i][None, ...], batch_color[i][None, ...],
-                                            batch_gt_depth[i][None, ...], batch_gt_rgb[i][None, ...],
-                                            batch_obj_mask[i][None, ...], batch_depth_mask[i][None, ...],
-                                            batch_sampled_z[i][None, ...])
-                batch_loss += class_loss
+        batch_loss, batch_loss_dict, batch_loss_col = \
+            loss.step_batch_loss(batch_alpha, batch_color,
+                                    batch_gt_depth.detach(), batch_gt_rgb.detach(),
+                                    batch_obj_mask.detach(), batch_depth_mask.detach(),
+                                    batch_sampled_z.detach())
+        batch_loss_dict['cls_ids'] = cls_ids
 
         reg_scaling=0.0005
         reg_loss_shape, reg_loss_texture = loss.step_batch_loss_reg(cls_dict, torch.from_numpy(cls_ids).to(cfg.training_device))#obj_ids
@@ -216,7 +179,7 @@ def main(args):
         optimizer.zero_grad(set_to_none=True)
         
         # log loss
-        if iteration % cfg.log_iter == 0 and cfg.training_strategy == "vmap":
+        if iteration % cfg.log_iter == 0:
             loss.log_loss(writer, batch_loss_dict, iteration)
             if scene_bg is not None:
                 loss.log_psnr(writer, cls_ids, batch_loss_col, iteration, bg_loss_col=bg_loss_col)
@@ -225,13 +188,12 @@ def main(args):
         
         # update each origin model params
         # todo find a better way    # https://github.com/pytorch/functorch/issues/280
-        if cfg.training_strategy == "vmap":
-            with torch.no_grad():
-                for model_id, (cls_id, cls_k) in enumerate(cls_dict.items()):
-                    for i, param in enumerate(cls_k.trainer.fc_occ_map.parameters()):
-                        param.copy_(fc_param[i][model_id])
-                    for i, param in enumerate(cls_k.trainer.pe.parameters()):
-                        param.copy_(pe_param[i][model_id])
+        with torch.no_grad():
+            for model_id, (cls_id, cls_k) in enumerate(cls_dict.items()):
+                for i, param in enumerate(cls_k.trainer.fc_occ_map.parameters()):
+                    param.copy_(fc_param[i][model_id])
+                for i, param in enumerate(cls_k.trainer.pe.parameters()):
+                    param.copy_(pe_param[i][model_id])
         
         # saving checkpoint
         if iteration % cfg.save_it == 0:

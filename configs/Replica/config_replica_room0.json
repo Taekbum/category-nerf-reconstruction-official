@@ -12,11 +12,9 @@
         }
     },
     "trainer": {
-        "do_bg": 1,
         "n_models": 100,
         "train_device": "cuda:0",
         "data_device": "cuda:0",
-        "training_strategy": "vmap",
         "scale": 1000.0,
         "max_iter": 10001,
         "log_iter": 100,
@@ -38,7 +36,6 @@
         "opacity_scaling": 10.0,
         "surface_eps": 0.1,
         "other_eps": 0.05,
-        "hidden_layers_block": 1,
         "hidden_feature_size": 32,
         "hidden_feature_size_bg": 128,
         "net_hyperparams": {
@@ -59,7 +56,6 @@
         "mh": 0
     },
     "vis": {
-        "vis_device": "cuda:0",
         "grid_dim": 256,
         "live_voxel_size": 0.005,
         "mesh_it": 10000
@@ -67,7 +63,7 @@
     "registration": {
         "load_registration_result": true,
         "load_pretrained": true,
-        "weight_root": "/media/satassd_1/tblee-larr/CVPR24/vMAP_offline/logs/0718/room_0",
+        "weight_root": "pretrained/vMAP/Replica/room_0",
         "multi_init_pose": true,
         "eta1": 0.06,
         "eta2": 0.15,
