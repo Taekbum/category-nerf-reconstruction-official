@@ -31,6 +31,7 @@ Follow [Instructions for installing TEASER++ python bindings](https://teaser.rea
 ## Data
 ### Dataset
 We tested our method on Replica and ScanNet. We follow [vMAP](https://github.com/kxhit/vMAP?tab=readme-ov-file#dataset) to prepare the dataset.
+**NOTE:** You should select 1 frame every 10 frames to avoid memory & computation time issue and to reproduce our results.
 The structure of the dataset is outlined as follows:
 ```
 Datasets/
