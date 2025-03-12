@@ -25,8 +25,8 @@ class CodeNeRF(nn.Module):
                  emb_size2, 
                  shape_blocks = 2, 
                  texture_blocks = 1, 
-                 W = 256, 
-                 latent_dim=256):
+                 W = 32, 
+                 latent_dim=32):
         super().__init__()
         self.shape_blocks = shape_blocks
         self.texture_blocks = texture_blocks

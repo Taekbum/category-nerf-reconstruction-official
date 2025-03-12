@@ -1,7 +1,9 @@
 {
     "dataset": {
-        "path": "Datasets/Replica/room_0/sequences",
-        "format": "Replica"
+        "path": "Datasets/ScanNet/scene0281_00/sequences",
+        "format": "ScanNet",
+        "use_refined_mask": true,
+        "load_refined_mask": true
     },
     "optimizer": {
         "args":{
@@ -21,7 +23,7 @@
         "save_iter": 2000
     },
     "render": {
-        "depth_range": [0.0, 8.0],
+        "depth_range": [0.0, 6.0],
         "n_bins": 9,
         "n_bins_cam2surface": 1,
         "n_bins_cam2surface_bg": 5,
@@ -30,30 +32,27 @@
     },
     "model": {
         "n_unidir_funcs": 5,
-        "obj_scale": 2.0,
-        "bg_scale": 5.0,
+        "obj_scale": 3.0,
+        "bg_scale": 10.0,
         "color_scaling": 5.0,
         "opacity_scaling": 10.0,
         "surface_eps": 0.1,
         "other_eps": 0.05,
+        "hidden_layers_block": 1,
         "hidden_feature_size": 32,
         "hidden_feature_size_bg": 128,
         "net_hyperparams": {
             "shape_blocks": 2,
             "texture_blocks": 1,
             "W": 32,
-            "latent_dim": 256
+            "latent_dim": 32
         }
     },
     "camera": {
-        "w": 1200,
-        "h": 680,
-        "fx": 600.0,
-        "fy": 600.0,
-        "cx": 599.5,
-        "cy": 339.5,
-        "mw": 0,
-        "mh": 0
+        "w": 640,
+        "h": 480,
+        "mw": 10,
+        "mh": 10
     },
     "vis": {
         "grid_dim": 256,
@@ -63,7 +62,7 @@
     "registration": {
         "load_registration_result": true,
         "load_pretrained": true,
-        "weight_root": "pretrained/Replica/room_0",
+        "weight_root": "pretrained/ScanNet/scene0281_00",
         "multi_init_pose": true,
         "eta1": 0.06,
         "eta2": 0.15,

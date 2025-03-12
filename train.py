@@ -1,6 +1,7 @@
+import sys
+sys.path.append('src')
 import loss
 from scene_cateogries import *
-from utils import get_transform_from_tensor
 import utils
 import dataset
 from functorch import vmap
@@ -12,6 +13,10 @@ from tqdm import trange
 from torch.utils.tensorboard import SummaryWriter
 
 def main(args):
+    # init config
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = True
+    
     # setting params
     log_dir = args.logdir
     config_file = args.config
@@ -39,7 +44,7 @@ def main(args):
     fc_models, pe_models = [], []
     scene_bg = None
     
-    # parse dataset
+    # category-level registration
     data = dataset.get_dataset(cfg)
     for cls_id in data.inst_dict.keys():
         assert len(cls_dict.keys()) < cfg.max_n_models
@@ -196,7 +201,7 @@ def main(args):
                     param.copy_(pe_param[i][model_id])
         
         # saving checkpoint
-        if iteration % cfg.save_it == 0:
+        if iteration % cfg.save_iter == 0:
             os.makedirs(ckpt_dir, exist_ok=True)
             print(f'Saving ckpt at iteration {iteration}')       
             for cls_id in vis_dict.keys():
@@ -226,7 +231,7 @@ def main(args):
                         obj_tensor = cls_k.object_tensor_dict[obj_id]
                         mesh = cls_k.trainer.meshing(obj_id, grid_dim=adaptive_grid_dim)
                         scale_np = obj_tensor[0].detach().cpu().numpy()
-                        transform_np = get_transform_from_tensor(obj_tensor[1:]).detach().cpu().numpy()
+                        transform_np = utils.get_transform_from_tensor(obj_tensor[1:]).detach().cpu().numpy()
 
                         if mesh is None:
                             print("mesh failed obj ", obj_id)
@@ -239,7 +244,7 @@ def main(args):
                  
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--logdir', default="./logs/commit1/Replica/room_0", type=str)
+    parser.add_argument('--logdir', default="./logs/Replica/room_0", type=str)
     parser.add_argument('--config', default="./configs/Replica/config_replica_room0.json", type=str)
     args = parser.parse_args()
     

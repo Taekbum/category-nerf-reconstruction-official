@@ -1,6 +1,6 @@
 {
     "dataset": {
-        "path": "Datasets/Replica/room_0/sequences",
+        "path": "Datasets/Replica/office_3/sequences",
         "format": "Replica"
     },
     "optimizer": {
@@ -63,7 +63,7 @@
     "registration": {
         "load_registration_result": true,
         "load_pretrained": true,
-        "weight_root": "pretrained/Replica/room_0",
+        "weight_root": "pretrained/Replica/office_3",
         "multi_init_pose": true,
         "eta1": 0.06,
         "eta2": 0.15,

@@ -13,9 +13,9 @@ import pickle
 from utils import enlarge_bbox, get_bbox2d, get_bbox2d_batch, geometry_segmentation, refine_inst_data, unproject_pointcloud
 from category_registration import *
 
-def get_dataset(cfg, train_mode=True):
+def get_dataset(cfg):
     if cfg.dataset_format == "Replica":
-        dataset = Replica(cfg, train_mode=train_mode)
+        dataset = Replica(cfg)
     elif cfg.dataset_format == "ScanNet":
         dataset = ScanNet(cfg) 
     else:
@@ -24,7 +24,7 @@ def get_dataset(cfg, train_mode=True):
     return dataset     
 
 class Replica(Dataset):
-    def __init__(self, cfg, train_mode=True):
+    def __init__(self, cfg):
         self.name = "replica"
         self.device = cfg.data_device
         self.root_dir = cfg.dataset_dir
@@ -76,6 +76,14 @@ class Replica(Dataset):
             align_poses(self.inst_dict, bbox3d_dict, count_dict, pe_dict, fc_occ_map_dict, 
                         name=self.name, multi_init_pose=cfg.multi_init_pose, eta1=cfg.eta1, eta2=cfg.eta2, eta3=cfg.eta3, device=self.device)
 
+            # remove intermediate results (pcs) which is useless
+            for cls_id in self.inst_dict.keys():
+                if cls_id == 0:
+                    del self.inst_dict[0]['pcs']
+                else:
+                    for inst_id in self.inst_dict[cls_id].keys():
+                        del self.inst_dict[cls_id][inst_id]['pcs']
+            
             with open(result_file, 'wb') as f:
                 pickle.dump(self.inst_dict, f)
             # self.get_all_poses()
@@ -186,16 +194,21 @@ class ScanNet(Dataset):
             self.root_dir, 'color', '*.jpg')), key=lambda x: int(os.path.basename(x)[:-4]))
         self.depth_paths = sorted(glob.glob(os.path.join(
             self.root_dir, 'depth', '*.png')), key=lambda x: int(os.path.basename(x)[:-4]))
+        self.raw_inst_paths = sorted(glob.glob(os.path.join(
+            self.root_dir, 'instance-filt', '*.png')), key=lambda x: int(os.path.basename(x)[:-4]))
+        self.raw_sem_paths = sorted(glob.glob(os.path.join(
+            self.root_dir, 'label-filt', '*.png')), key=lambda x: int(os.path.basename(x)[:-4]))
+        if cfg.use_refined_mask:
+            os.makedirs(os.path.join(self.root_dir, 'instance-refined'), exist_ok=True)
+            os.makedirs(os.path.join(self.root_dir, 'inst_to_cls'), exist_ok=True)
         if cfg.load_refined_mask:
             self.inst_paths = sorted(glob.glob(os.path.join(
                 self.root_dir, 'instance-refined', '*.npy')), key=lambda x: int(os.path.basename(x)[:-4]))
             self.sem_paths = sorted(glob.glob(os.path.join(
-                self.root_dir, 'label-refined', '*.npy')), key=lambda x: int(os.path.basename(x)[:-4]))
+                self.root_dir, 'inst_to_cls', '*.pkl')), key=lambda x: int(os.path.basename(x)[:-4]))
         else:
-            self.inst_paths = sorted(glob.glob(os.path.join(
-                self.root_dir, 'instance-filt', '*.png')), key=lambda x: int(os.path.basename(x)[:-4]))
-            self.sem_paths = sorted(glob.glob(os.path.join(
-                self.root_dir, 'label-filt', '*.png')), key=lambda x: int(os.path.basename(x)[:-4]))
+            self.inst_paths = self.raw_inst_paths
+            self.sem_paths = self.raw_sem_paths
         self.load_poses(os.path.join(self.root_dir, 'pose'))
         self.n_img = len(self.color_paths)
         self.depth_transform = transforms.Compose(
@@ -228,7 +241,6 @@ class ScanNet(Dataset):
         #1-wall, 3-floor, 16-window, 41-ceiling, 232-light switch   0-unknown? 21-pillar 161-doorframe, shower walls-128, curtain-21, windowsill-141
         self.background_cls_list = [-1, 0, 1, 3, 16, 41, 232, 21, 161, 128, 21]
         self.bbox_scale = 0.2
-        self.inst_filter_dict = {}
         self.inst_dict = {}
         
         self.use_refined_mask = cfg.use_refined_mask
@@ -248,6 +260,14 @@ class ScanNet(Dataset):
             align_poses(self.inst_dict, bbox3d_dict, count_dict, pe_dict, fc_occ_map_dict, 
                         name=self.name, multi_init_pose=cfg.multi_init_pose, eta1=cfg.eta1, eta2=cfg.eta2, eta3=cfg.eta3, device=self.device) 
             
+            # remove intermediate results (pcs) which is useless
+            for cls_id in self.inst_dict.keys():
+                if cls_id == 0:
+                    del self.inst_dict[0]['pcs']
+                else:
+                    for inst_id in self.inst_dict[cls_id].keys():
+                        del self.inst_dict[cls_id][inst_id]['pcs']
+            
             with open(result_file, 'wb') as f:
                 pickle.dump(self.inst_dict, f)
             # self.get_all_poses()
@@ -265,8 +285,8 @@ class ScanNet(Dataset):
             bbox_scale = self.bbox_scale
             color_path = self.color_paths[index]
             depth_path = self.depth_paths[index]
-            inst_path = self.inst_paths[index]
-            sem_path = self.sem_paths[index]
+            inst_path = self.inst_paths[index] if len(self.inst_paths) > index else ''
+            sem_path = self.sem_paths[index] if len(self.sem_paths) > index else ''
             color_data = cv2.imread(color_path).astype(np.uint8)
             color_data = cv2.cvtColor(color_data, cv2.COLOR_BGR2RGB)
             depth_data = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED).astype(np.float32)
@@ -292,20 +312,20 @@ class ScanNet(Dataset):
             
             if self.load_refined_mask and os.path.exists(inst_path) and os.path.exists(sem_path):
                 inst_data = np.load(inst_path)
-                sem_data = np.load(sem_path)
+                with open(sem_path, 'rb') as f:
+                    inst_to_cls = pickle.load(f)
                 
                 cls_list = []
                 inst_list = []
-                inst_to_cls = {0:0}
-                for inst_id in np.unique(inst_data):
-                    inst_mask = inst_data == inst_id
-                    sem_cls = np.unique(sem_data[inst_mask])  # sem label, only interested obj
-                    assert sem_cls.shape[0] == 1
-                    sem_cls = sem_cls[0]
+                for inst_id in inst_to_cls.keys():
+                    if inst_id == 0:
+                        continue
+                    sem_cls = inst_to_cls[inst_id]
                     cls_list.append(sem_cls)
                     inst_list.append(inst_id)
-                    inst_to_cls[inst_id] = sem_cls
-            else:    
+            else:
+                inst_path = self.raw_inst_paths[index]
+                sem_path = self.raw_sem_paths[index] 
                 inst_data = cv2.imread(inst_path, cv2.IMREAD_UNCHANGED)
                 inst_data = cv2.resize(inst_data, (W, H), interpolation=cv2.INTER_NEAREST).astype(np.int32)
                 sem_data = cv2.imread(sem_path, cv2.IMREAD_UNCHANGED)
@@ -340,9 +360,10 @@ class ScanNet(Dataset):
                     normal, geometry_label, segment_masks, segments = geometry_segmentation(color_data, depth_data, self.intrinsic_open3d)
                     inst_data = refine_inst_data(inst_data, segment_masks)
                     inst_path_new = os.path.join(self.root_dir, 'instance-refined', os.path.basename(inst_path)[:-4]+".npy")
-                    sem_path_new = os.path.join(self.root_dir, 'label-refined', os.path.basename(sem_path)[:-4]+".npy")
+                    sem_path_new = os.path.join(self.root_dir, 'inst_to_cls', os.path.basename(sem_path)[:-4]+".pkl")
                     np.save(inst_path_new, inst_data)
-                    np.save(sem_path_new, sem_data)
+                    with open(sem_path_new, 'wb') as f:
+                        pickle.dump(inst_to_cls, f)
             
             refined_obj_ids = np.unique(inst_data)
             for obj_id in refined_obj_ids:

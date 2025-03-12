@@ -73,10 +73,8 @@ class Config:
 
         # optimizer setting
         self.learning_rate = config["optimizer"]["args"]["lr"]
-        self.pose_learning_rate = config["optimizer"]["args"]["pose_lr"]
         self.code_learning_rate = config["optimizer"]["args"]["code_lr"]
         self.weight_decay = config["optimizer"]["args"]["weight_decay"]
-        self.pose_weight_decay = config["optimizer"]["args"]["pose_weight_decay"]
         self.code_weight_decay = config["optimizer"]["args"]["code_weight_decay"]
 
         # vis setting
@@ -91,10 +89,9 @@ class Config:
 
         # category-level registration
         self.load_registration_result = config["registration"]["load_registration_result"]
-        if not self.load_registration_result:
-            self.load_pretrained = config["registration"]["load_pretrained"]
-            self.weight_root = config["registration"]["weight_root"]
-            self.multi_init_pose = config["registration"]["multi_init_pose"]
-            self.eta1 = config["registration"]["eta1"]
-            self.eta2 = config["registration"]["eta2"]
-            self.eta3 = config["registration"]["eta3"]
+        self.load_pretrained = config["registration"]["load_pretrained"]
+        self.weight_root = config["registration"]["weight_root"]
+        self.multi_init_pose = config["registration"]["multi_init_pose"]
+        self.eta1 = config["registration"]["eta1"]
+        self.eta2 = config["registration"]["eta2"]
+        self.eta3 = config["registration"]["eta3"]

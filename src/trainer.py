@@ -14,13 +14,13 @@ class Trainer:
         self.inst_id_to_index = {inst_id: inst_ids.index(inst_id) for inst_id in inst_ids}
         self.n_obj = len(inst_ids)
         self.device = cfg.training_device
-        self.obj_scale = cfg.obj_scale # 10 for bg and iMAP
+        self.obj_scale = cfg.obj_scale # 10 for bg
         self.n_unidir_funcs = cfg.n_unidir_funcs
 
         self.emb_size1 = 21*(3+1)+3
         self.emb_size2 = 21*(5+1)+3 - self.emb_size1
         if cls_id == 0:
-            self.hidden_feature_size = cfg.hidden_feature_size #32 for obj  # 256 for iMAP, 128 for seperate bg
+            self.hidden_feature_size = cfg.hidden_feature_size #32 for obj  # 128 for seperate bg
             self.load_NeRF()
         else:
             self.net_hyperparams = cfg.net_hyperparams
@@ -122,7 +122,7 @@ class Trainer:
 
         return mesh
 
-    def eval_points(self, points, inst_id=None, chunk_size=500000, interpolate_mode=None, other_id=None, t=None, average_shape=False, average_texture=False):
+    def eval_points(self, points, inst_id=None, chunk_size=500000):
         # 256^3 = 16777216
         if self.cls_id != 0:
             obj_idx = torch.from_numpy(np.array(self.inst_id_to_index[inst_id])).to(self.device)
