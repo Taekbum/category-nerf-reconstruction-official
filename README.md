@@ -46,7 +46,7 @@ Datasets/
 │   └── ...
 ```
 
-## Checkpoints of pretrained vMAP (offline version we implemented) 
+### Checkpoints of pretrained vMAP (offline version we implemented) 
 Our method requires pretrained vMAP models, which serve as pretrained object-level neural field models. We provide [checkpoints](https://drive.google.com/file/d/1e1nrER3aLdI4WjLXqfI6DAh1FYeo15pV/view?usp=sharing) for all scenes we reported in our paper.
 
 ### Sample dataset
